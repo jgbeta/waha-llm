@@ -1,4 +1,4 @@
-# Deployment Runbook - WAHA AI WhatsApp Bot
+# Deployment Runbook - WAHA LLM
 
 ## 1. Runtime Map
 
@@ -13,7 +13,23 @@
 
 For LAN or remote deployments, replace `localhost` in user-facing commands with the host IP or DNS name. Keep the internal Compose URLs as `http://waha:3000` and `http://bot:8000/webhook`.
 
-## 2. First-Time Setup
+## 2. Docker Names
+
+This Compose file uses three different Docker naming concepts:
+
+- Compose project name: `waha-llm`.
+- Compose service names: `waha` and `bot`. Service names provide internal Docker DNS, so WAHA must keep using `http://bot:8000/webhook`.
+- Docker container names: `waha-server` for WAHA and `waha-llm` for the FastAPI/LLM service.
+
+Commands such as `docker compose logs bot` and `docker compose exec waha ...` use service names, not container names. If Docker reports a name conflict, remove stale fixed-name containers:
+
+```bash
+docker compose down --remove-orphans
+docker rm -f waha-server waha-llm
+docker compose up -d --build
+```
+
+## 3. First-Time Setup
 
 ```bash
 cp .env.example .env
@@ -36,7 +52,7 @@ BOT_HISTORY_STORE=sqlite
 
 `WAHA_WEBHOOK_HMAC_KEY` can stay blank for initial local validation. For real deployments, set it to a shared secret so WAHA signs webhook calls and the bot verifies them.
 
-## 3. Optional PostgreSQL Setup
+## 4. Optional PostgreSQL Setup
 
 SQLite is the default. To use PostgreSQL, replace the active SQLite storage block in `.env` with:
 
@@ -74,7 +90,7 @@ CREATE TABLE IF NOT EXISTS table_name (
 
 The bot also creates and uses `waha_inbound_jobs` for durable inbound job dedupe and retry state.
 
-## 4. Persistent Storage
+## 5. Persistent Storage
 
 The default Compose file persists runtime state with bind mounts:
 
@@ -88,13 +104,13 @@ services:
       - ./data:/data
 ```
 
-`BOT_SQLITE_PATH=/data/bot.sqlite3` is a path inside the bot container. It is durable only because `./data:/data` maps `/data` to a host directory. To move SQLite storage, change the left side of the volume, for example `/srv/waha-bot/data:/data`, and usually keep `BOT_SQLITE_PATH=/data/bot.sqlite3`.
+`BOT_SQLITE_PATH=/data/bot.sqlite3` is a path inside the bot container. It is durable only because `./data:/data` maps `/data` to a host directory. To move SQLite storage, change the left side of the volume, for example `/srv/waha-llm/data:/data`, and usually keep `BOT_SQLITE_PATH=/data/bot.sqlite3`.
 
-WAHA stores WhatsApp session/auth data under `/app/.sessions`. Keep `./waha-sessions:/app/.sessions`, or change the left side to another host path such as `/srv/waha-bot/waha-sessions:/app/.sessions`, so QR login survives restarts and rebuilds.
+WAHA stores WhatsApp session/auth data under `/app/.sessions`. Keep `./waha-sessions:/app/.sessions`, or change the left side to another host path such as `/srv/waha-llm/waha-sessions:/app/.sessions`, so QR login survives restarts and rebuilds.
 
 PostgreSQL mode stores jobs/history in PostgreSQL instead of local SQLite, but WAHA still needs the `waha-sessions` mount for persistent WhatsApp authentication.
 
-## 5. Startup
+## 6. Startup
 
 ```bash
 docker compose up -d --build
@@ -116,7 +132,7 @@ curl -s -H "X-Api-Key: $(grep WAHA_API_KEY .env | cut -d= -f2)" \
 
 Wait for `"status": "WORKING"`.
 
-## 6. Health Checks
+## 7. Health Checks
 
 ```bash
 curl http://localhost:3000/ping
@@ -127,7 +143,7 @@ docker compose ps
 
 Run the bot with one Uvicorn worker. The default worker uses an in-process queue, per-chat locks, and LID cache.
 
-## 7. Webhook Test
+## 8. Webhook Test
 
 If `WAHA_WEBHOOK_HMAC_KEY` is blank, replay the sample webhook. The sample uses `12025550123@c.us`; keep that number allowlisted for this endpoint-only test, or edit `examples/webhook_message.json` to match one of your allowlisted chat IDs. To avoid sending a reply during replay testing, set `BOT_AUTOREPLY_ENABLED=false` and restart the bot first.
 
@@ -157,7 +173,7 @@ psql -h "$PG_HOST" -U "$PG_USER" -d "$PG_DBNAME" \
   -c "SELECT message_id, chat_id, status, error FROM waha_inbound_jobs ORDER BY received_at DESC LIMIT 5;"
 ```
 
-## 8. Allowlist And LID Mapping
+## 9. Allowlist And LID Mapping
 
 WAHA may deliver a personal chat as a Linked ID such as `62590675898548@lid` instead of `12025550123@c.us`. The bot resolves inbound `@lid` values through WAHA before applying `BOT_ALLOWED_PHONES`.
 
@@ -176,7 +192,7 @@ Expected shape:
 
 If the mapping is missing or points to another phone, the bot logs `ignored_disallowed_chat` and does not reply.
 
-## 9. Storage Modes
+## 10. Storage Modes
 
 Recommended SQLite default:
 
@@ -208,7 +224,7 @@ BOT_HISTORY_STORE=memory
 BOT_REQUIRE_ALLOWLIST=false
 ```
 
-## 10. Debug Modes
+## 11. Debug Modes
 
 ```env
 BOT_AUTOREPLY_ENABLED=false  # accept and store webhooks, but do not generate/send replies
@@ -233,7 +249,7 @@ Inspect SQLite:
 python -m scripts.inspect_db data/bot.sqlite3
 ```
 
-## 11. Recovery
+## 12. Recovery
 
 ```bash
 docker compose ps
@@ -245,10 +261,11 @@ curl http://localhost:8000/ready | python3 -m json.tool
 
 If WAHA logs `getaddrinfo ENOTFOUND bot` or `connect ECONNREFUSED ...:8000`, WAHA cannot reach the Compose service named `bot`. This is Docker DNS, startup order, stale-container, or bot-startup failure. It is not caused by WhatsApp authentication, OpenAI, or a Postgres query inside message handling.
 
-First reset stale containers and orphans, then rebuild:
+First reset stale containers and orphans, remove fixed-name containers, then rebuild:
 
 ```bash
 docker compose down --remove-orphans
+docker rm -f waha-server waha-llm
 docker compose up -d --build
 docker compose ps
 docker compose logs --tail=100 bot

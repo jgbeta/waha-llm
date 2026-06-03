@@ -1,4 +1,4 @@
-# WAHA AI WhatsApp Bot
+# WAHA LLM
 
 A single-process FastAPI bot for WAHA webhooks. WAHA receives WhatsApp messages, posts them to `/webhook`, and the bot replies with an OpenAI-compatible chat model.
 
@@ -35,6 +35,22 @@ Open `http://localhost:3000/dashboard`, start the `default` session, and scan th
 - Group chats are ignored unless `BOT_ALLOW_GROUPS=true`.
 - WAHA `@lid` chat IDs are resolved before allowlist checks.
 
+## Docker Names
+
+This Compose file uses three different Docker naming concepts:
+
+- Compose project name: `waha-llm`.
+- Compose service names: `waha` and `bot`. These are used for internal DNS, so keep `http://bot:8000/webhook`.
+- Docker container names: `waha-server` for WAHA and `waha-llm` for the FastAPI/LLM service.
+
+If Docker reports a name conflict, remove stale containers and restart the project:
+
+```bash
+docker compose down --remove-orphans
+docker rm -f waha-server waha-llm
+docker compose up -d --build
+```
+
 ## Persistent Storage
 
 The default Compose file uses bind mounts so important state survives container rebuilds and recreations:
@@ -59,10 +75,10 @@ To store data somewhere else, change the left side of each volume and keep the r
 services:
   waha:
     volumes:
-      - /srv/waha-bot/waha-sessions:/app/.sessions
+      - /srv/waha-llm/waha-sessions:/app/.sessions
   bot:
     volumes:
-      - /srv/waha-bot/data:/data
+      - /srv/waha-llm/data:/data
 ```
 
 For SQLite, usually leave `BOT_SQLITE_PATH=/data/bot.sqlite3` and move the host directory through the Compose volume.
@@ -133,10 +149,11 @@ curl http://localhost:8000/health
 docker compose exec waha node -e "require('dns').lookup('bot',(e,a)=>{console.log(e||a);process.exit(e?1:0)})"
 ```
 
-If stale containers are involved, reset the Compose project:
+If stale containers are involved, reset the Compose project and remove fixed-name containers:
 
 ```bash
 docker compose down --remove-orphans
+docker rm -f waha-server waha-llm
 docker compose up -d --build
 ```
 
